@@ -3,7 +3,7 @@
 import numpy as np
 import socket, pickle
 from reversi import reversi
-
+from random import choice
 game = reversi()
 
 def main():
@@ -27,10 +27,11 @@ def main():
         print(turn)
         print(board)
 
-        #We want to initially favor the edges of the board
+        #TODO: hardcode favorable moves like corners and edges, then use monte carlo for the rest of the moves
+
         x = -1
         y = -1
-        monte_carlo(x,y, turn, board)
+        x,y = monte_carlo(turn, board, game.directions)
 
         #Send your move to the server. Send (x,y) = (-1,-1) to tell the server you have no hand to play
         game_socket.send(pickle.dumps([x,y]))
@@ -53,31 +54,115 @@ class Nodes:
         self.visits = 0
         self.wins = 0
 
-def monte_carlo(x, y, turn, board):
-    #Create a current state of the game
-    curr_state = Nodes(x,y,turn, board)
-
-    #Now, we need to simulate the different possible moves and add them to children list
-    simulation(curr_state, board)
-    pass
-
-def simulation(curr_state, board):
-    #First, copy the current state of the board
-    temp_board = curr_state.board
-
-    #While the game isn't finished, we want to aggregate legal moves
-
-    #if we, and the other player have no legal moves, that indicates the end of the game
+def monte_carlo(turn, board, directions):
+    possible_moves = get_legal_moves(board, turn)
     
+    if not possible_moves:
+        return -1, -1
 
-#Based on win count of each child node of the curr state, pick the most promising child 
-def selection(current_state):
-    contender = Nodes(0,0,0,0)
-    for child in current_state.children:
-        contender = max(contender.wins, child.wins)
+    move_wins = {}
 
-    return contender
+    for move in possible_moves:
+        wins = 0
+        simulations_per_move = 1000 
+        
+        #Only account for wins (maximize wins and favor picking that node)
+        for _ in range(simulations_per_move):
+            result = simulation(move, turn, board, directions)
+            if result == turn:
+                wins += 1
+        
+        move_wins[move] = wins
 
+    # Pick the move that had the most wins
+    best_move = max(move_wins, key=move_wins.get)
+    return best_move
+
+
+#Create a temp board and simulate a game starting from the given move, returning the winner at the end of the game
+#simulation picks random legal moves up to a certain depth, then counts pieces on board to determine winner
+def simulation(start_move, start_turn, board, directions):
+    temp_board = np.copy(board)
+
+    temp_board = local_step(temp_board, start_move[0], start_move[1], start_turn, directions)
+
+    temp_turn = -start_turn
+    pass_count = 0
+
+    while pass_count < 2:
+        legal_moves = get_legal_moves(temp_board, temp_turn)
+
+        if len(legal_moves) == 0:
+            pass_count += 1
+            temp_turn = -temp_turn
+            continue
+        else:
+            pass_count = 0
+            move = choice(legal_moves)
+            temp_board = local_step(temp_board, move[0], move[1], temp_turn, directions)
+            temp_turn = -temp_turn
+    
+    white_count = np.sum(temp_board == 1)
+    black_count = np.sum(temp_board == -1)
+
+    return 1 if white_count > black_count else -1 if black_count > white_count else 0
+
+
+#Aggregates legal moves
+def get_legal_moves(board, turn):
+    legal_moves = []
+    for i in range(8):
+        for j in range(8):
+            if is_legal(board, i, j, turn, game.directions):
+                legal_moves.append((i,j))
+    return legal_moves
+
+#Checks if placing a move is legal based on:
+#1. The cell must be empty
+#2. There must be at least one straight (horizontal, vertical, or diagonal) occupied
+# line between the new piece and another piece of the same color, with one or more contiguous opponent pieces between them
+def is_legal(board, x, y, piece, directions):
+    if board[x,y] != 0:
+        return False
+    
+    for dx, dy in directions:
+        cursor_x, cursor_y = x + dx, y + dy
+        flip_list = []
+        
+        while 0 <= cursor_x <= 7 and 0 <= cursor_y <= 7:
+            if board[cursor_x, cursor_y] == 0:
+                break
+            elif board[cursor_x, cursor_y] == piece:
+                if flip_list:
+                    return True
+                else:
+                    break
+            else:
+                flip_list.append((cursor_x, cursor_y))
+                cursor_x += dx
+                cursor_y += dy
+    return False
+
+#This is essentially the step func in reversi.py, but it simply updates the game board without any score logic
+#Used to simulte games in monte carlo without affecting the actual game state
+def local_step(board, x, y, piece, directions):
+    board[x, y] = piece
+    for dx, dy in directions:
+        cursor_x, cursor_y = x + dx, y + dy
+        flip_list = []
+        
+        while 0 <= cursor_x <= 7 and 0 <= cursor_y <= 7:
+            if board[cursor_x, cursor_y] == 0:
+                break
+            elif board[cursor_x, cursor_y] == piece:
+                for cord_x, cord_y in flip_list:
+                    board[cord_x, cord_y] = piece
+                break
+            else:
+                flip_list.append((cursor_x, cursor_y))
+                cursor_x += dx
+                cursor_y += dy
+    return board
 
 
 
